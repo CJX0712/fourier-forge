@@ -1,0 +1,362 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>FourierForge · 傅里叶画图机</title>
+<style>
+  :root{
+    --bg:#0d1117; --panel:#161b22; --border:#30363d; --txt:#e6edf3;
+    --muted:#8b949e; --accent:#58a6ff; --live:#3fb950; --pen:#f0883e;
+  }
+  *{box-sizing:border-box;}
+  body{margin:0;background:var(--bg);color:var(--txt);
+    font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;}
+  .wrap{max-width:1060px;margin:0 auto;padding:20px;}
+  h1{font-size:20px;margin:0 0 4px;letter-spacing:.5px;}
+  h1 .v{color:var(--accent);}
+  .sub{color:var(--muted);font-size:12px;margin-bottom:16px;}
+  .layout{display:grid;grid-template-columns:1fr 300px;gap:16px;}
+  @media(max-width:820px){.layout{grid-template-columns:1fr;}}
+  .stage{background:var(--panel);border:1px solid var(--border);border-radius:8px;padding:12px;}
+  canvas{display:block;width:100%;height:auto;background:#05060a;border:1px solid var(--border);border-radius:4px;}
+  .side{display:flex;flex-direction:column;gap:12px;}
+  .card{background:var(--panel);border:1px solid var(--border);border-radius:8px;padding:12px;}
+  .card h2{font-size:12px;margin:0 0 10px;color:var(--muted);text-transform:uppercase;letter-spacing:1px;}
+  .row{display:flex;gap:8px;flex-wrap:wrap;}
+  button{background:#21262d;color:var(--txt);border:1px solid var(--border);border-radius:6px;
+    padding:7px 10px;font-size:12px;cursor:pointer;font-family:inherit;}
+  button:hover{border-color:var(--accent);}
+  button.primary{background:var(--accent);color:#0d1117;border-color:var(--accent);font-weight:600;}
+  button.active{border-color:var(--live);color:var(--live);}
+  label{font-size:11px;color:var(--muted);display:block;margin:8px 0 4px;}
+  input[type=range]{width:100%;}
+  .stats{display:flex;justify-content:space-between;font-size:12px;padding:4px 0;border-bottom:1px dashed var(--border);}
+  .stats:last-child{border-bottom:none;}
+  .stats b{color:var(--accent);}
+  .self{font-size:11px;line-height:1.7;}
+  .self .ok{color:var(--live);}
+  .self .bad{color:#f85149;}
+  .hint{font-size:11px;color:var(--muted);line-height:1.6;}
+  .legend{font-size:11px;color:var(--muted);line-height:1.7;}
+  .sw{display:inline-block;width:10px;height:10px;border-radius:2px;vertical-align:middle;margin-right:4px;}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>FourierForge <span class="v">·</span> 傅里叶画图机</h1>
+  <div class="sub">单文件离线傅里叶级数画图机 · DFT 分解路径 → 旋转圆链（epicycles）重构 — <a href="https://github.com/CJX0712/fourier-forge" style="color:var(--accent)">github.com/CJX0712/fourier-forge</a></div>
+
+  <div class="layout">
+    <div class="stage">
+      <canvas id="cv" width="620" height="620"></canvas>
+      <label>系数个数 K <span id="kLabel">16</span> / 256 · 重构误差 <span id="errLabel">0</span>%</label>
+      <input id="kSlider" type="range" min="1" max="256" value="16">
+    </div>
+
+    <div class="side">
+      <div class="card">
+        <h2>路径</h2>
+        <div class="row" id="paths">
+          <button data-p="heart" class="active">心形</button>
+          <button data-p="star">星形</button>
+          <button data-p="liss">利萨茹</button>
+          <button data-p="spiral">螺旋</button>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2>状态</h2>
+        <div class="stats"><span>采样点 N</span><b id="stN">256</b></div>
+        <div class="stats"><span>使用系数 K</span><b id="stK">16</b></div>
+        <div class="stats"><span>RMS 误差</span><b id="stErr">0</b></div>
+        <div class="stats"><span>Parseval 比</span><b id="stPar">1.000000</b></div>
+      </div>
+
+      <div class="card">
+        <h2>控制</h2>
+        <div class="row">
+          <button id="play" class="primary">▶ 播放</button>
+          <button id="restart">重播</button>
+        </div>
+        <div class="legend" style="margin-top:8px;">
+          <div><span class="sw" style="background:#58a6ff"></span>旋转圆链（epicycles）</div>
+          <div><span class="sw" style="background:#f0883e"></span>画笔</div>
+          <div><span class="sw" style="background:#30363d"></span>原始路径（幽灵线）</div>
+        </div>
+        <div class="hint" style="margin-top:6px;">K 越大圆越多、画得越像。按幅度取前 K 个频率，截断误差随 K 单调递减（最小二乘最优）。</div>
+      </div>
+
+      <div class="card">
+        <h2>内置自检</h2>
+        <div class="self" id="selfcheck">点击「运行自检」验证 DFT 不变量。</div>
+        <div class="row" style="margin-top:8px;">
+          <button id="selftest">运行自检</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script id="engine">
+// ===== FourierForge engine (pure, headless-extractable) =====
+const Fourier = (function(){
+  // DFT: pts [{x,y}] as complex -> X[k] = Σ_n x[n]·e^{-2πikn/N}
+  function dft(pts){
+    const N = pts.length, out = [];
+    for (let k = 0; k < N; k++){
+      let re = 0, im = 0;
+      for (let n = 0; n < N; n++){
+        const ang = -2 * Math.PI * k * n / N;
+        const c = Math.cos(ang), s = Math.sin(ang);
+        re += pts[n].x * c - pts[n].y * s;
+        im += pts[n].x * s + pts[n].y * c;
+      }
+      out.push({ re, im });
+    }
+    return out;
+  }
+  // IDFT: x[n] = (1/N) Σ_k X[k]·e^{+2πikn/N}
+  function idft(coefs){
+    const N = coefs.length, out = [];
+    for (let n = 0; n < N; n++){
+      let re = 0, im = 0;
+      for (let k = 0; k < N; k++){
+        const ang = 2 * Math.PI * k * n / N;
+        const c = Math.cos(ang), s = Math.sin(ang);
+        re += coefs[k].re * c - coefs[k].im * s;
+        im += coefs[k].re * s + coefs[k].im * c;
+      }
+      out.push({ x: re / N, y: im / N });
+    }
+    return out;
+  }
+  function magnitude(c){ return Math.hypot(c.re, c.im); }
+  // indices sorted by |X| descending (optimal least-squares truncation order)
+  function topIndices(coefs, K){
+    const idx = coefs.map((c, i) => i);
+    idx.sort((a, b) => magnitude(coefs[b]) - magnitude(coefs[a]));
+    return idx.slice(0, K);
+  }
+  // reconstruct points from the selected coefficients only
+  function partialSum(coefs, idx){
+    const N = coefs.length, out = [];
+    for (let n = 0; n < N; n++){
+      let re = 0, im = 0;
+      for (const k of idx){
+        const ang = 2 * Math.PI * k * n / N;
+        const c = Math.cos(ang), s = Math.sin(ang);
+        re += coefs[k].re * c - coefs[k].im * s;
+        im += coefs[k].re * s + coefs[k].im * c;
+      }
+      out.push({ x: re / N, y: im / N });
+    }
+    return out;
+  }
+  function errRms(a, b){
+    let s = 0;
+    for (let i = 0; i < a.length; i++) s += (a[i].x - b[i].x) ** 2 + (a[i].y - b[i].y) ** 2;
+    return Math.sqrt(s / a.length);
+  }
+  // Σ|X|² / (N·Σ|x|²) — Parseval: should be exactly 1
+  function parsevalRatio(pts, coefs){
+    const N = pts.length;
+    let ex = 0, ek = 0;
+    for (const p of pts) ex += p.x * p.x + p.y * p.y;
+    for (const c of coefs) ek += c.re * c.re + c.im * c.im;
+    return ek / (N * ex);
+  }
+  return { dft, idft, magnitude, topIndices, partialSum, errRms, parsevalRatio };
+})();
+if (typeof module !== 'undefined' && module.exports) module.exports = Fourier;
+</script>
+
+<script>
+// ===== path library + UI =====
+(function(){
+  const N = 256;
+  function heartPts(){
+    const pts = [];
+    for (let i = 0; i < N; i++){
+      const t = i * 2 * Math.PI / N;
+      pts.push({ x: 16 * Math.sin(t) ** 3, y: 13 * Math.cos(t) - 5 * Math.cos(2 * t) - 2 * Math.cos(3 * t) - Math.cos(4 * t) });
+    }
+    return pts;
+  }
+  function starPts(){ // 5-point star, triangle-wave radius (piecewise linear -> rich spectrum)
+    const pts = [];
+    for (let i = 0; i < N; i++){
+      const t = i * 2 * Math.PI / N;
+      const ph = (t * 5 / (2 * Math.PI)) % 1;
+      const r = 15 - 9 * Math.abs(ph * 2 - 1);
+      pts.push({ x: r * Math.sin(t), y: -r * Math.cos(t) });
+    }
+    return pts;
+  }
+  function lissPts(){
+    const pts = [];
+    for (let i = 0; i < N; i++){
+      const t = i * 2 * Math.PI / N;
+      pts.push({ x: 14 * Math.sin(3 * t + Math.PI / 2), y: 14 * Math.sin(4 * t) });
+    }
+    return pts;
+  }
+  function spiralPts(){
+    const pts = [];
+    for (let i = 0; i < N; i++){
+      const t = i * 2 * Math.PI / N;
+      const r = 3 + 12 * (i / N);
+      pts.push({ x: r * Math.cos(3 * t), y: r * Math.sin(3 * t) });
+    }
+    return pts;
+  }
+  const PATHS = { heart: heartPts, star: starPts, liss: lissPts, spiral: spiralPts };
+
+  const cv = document.getElementById('cv');
+  const ctx = cv.getContext('2d');
+  const W = cv.width, H = cv.height;
+  let pathName = 'heart';
+  let coefs = [], idx = [], recon = [], t = 0, playing = false, raf = null;
+
+  function rebuild(){
+    const pts = PATHS[pathName]();
+    coefs = Fourier.dft(pts);
+    const K = +document.getElementById('kSlider').value;
+    idx = Fourier.topIndices(coefs, K);
+    recon = Fourier.partialSum(coefs, idx);
+    const err = Fourier.errRms(recon, PATHS[pathName]());
+    const rel = err / (Fourier.magnitude({ re: 0, im: 0 }) || 1) ; // abs RMS
+    document.getElementById('stK').textContent = K;
+    document.getElementById('kLabel').textContent = K;
+    document.getElementById('stErr').textContent = err.toFixed(3);
+    document.getElementById('errLabel').textContent = (err * 100 / 20).toFixed(2);
+    document.getElementById('stPar').textContent = Fourier.parsevalRatio(PATHS[pathName](), coefs).toFixed(6);
+    return recon;
+  }
+
+  function draw(){
+    ctx.fillStyle = '#05060a'; ctx.fillRect(0, 0, W, H);
+    const scale = 14, cx = W / 2, cy = H / 2;
+    const X = p => cx + p.x * scale, Y = p => cy - p.y * scale;
+    // ghost original path
+    const src = PATHS[pathName]();
+    ctx.strokeStyle = '#30363d'; ctx.lineWidth = 1; ctx.beginPath();
+    for (let i = 0; i <= src.length; i++){
+      const p = src[i % src.length];
+      if (i === 0) ctx.moveTo(X(p), Y(p)); else ctx.lineTo(X(p), Y(p));
+    }
+    ctx.stroke();
+    // epicycle chain at time t
+    let px = 0, py = 0;
+    ctx.lineWidth = 1;
+    for (const k of idx){
+      const ang = 2 * Math.PI * k * t / N;
+      const vx = coefs[k].re * Math.cos(ang) - coefs[k].im * Math.sin(ang);
+      const vy = coefs[k].re * Math.sin(ang) + coefs[k].im * Math.cos(ang);
+      const nx = px + vx / N, ny = py + vy / N;
+      const r = Math.hypot(vx, vy) / N;
+      if (r > 0.15){
+        ctx.strokeStyle = 'rgba(88,166,255,0.5)';
+        ctx.beginPath(); ctx.arc(X({ x: px, y: py }), Y({ x: px, y: py }), r * scale, 0, 2 * Math.PI); ctx.stroke();
+      }
+      ctx.strokeStyle = 'rgba(88,166,255,0.8)';
+      ctx.beginPath(); ctx.moveTo(X({ x: px, y: py }), Y({ x: px, y: py })); ctx.lineTo(X({ x: nx, y: ny })); ctx.stroke();
+      px = nx; py = ny;
+    }
+    // traced path up to t
+    ctx.strokeStyle = '#f0883e'; ctx.lineWidth = 2; ctx.beginPath();
+    for (let i = 0; i <= t && i < recon.length; i++){
+      const p = recon[i];
+      if (i === 0) ctx.moveTo(X(p), Y(p)); else ctx.lineTo(X(p), Y(p));
+    }
+    ctx.stroke();
+    // pen
+    const pen = recon[Math.min(t, recon.length - 1)];
+    ctx.fillStyle = '#f0883e';
+    ctx.beginPath(); ctx.arc(X(pen), Y(pen), 4, 0, 2 * Math.PI); ctx.fill();
+  }
+
+  function tick(){
+    if (!playing) return;
+    t = (t + 1) % N;
+    draw();
+    raf = requestAnimationFrame(tick);
+  }
+  document.getElementById('play').onclick = () => {
+    playing = !playing;
+    document.getElementById('play').textContent = playing ? '⏸ 暂停' : '▶ 播放';
+    if (playing) tick();
+  };
+  document.getElementById('restart').onclick = () => { t = 0; draw(); };
+  document.getElementById('kSlider').oninput = () => { rebuild(); draw(); };
+  document.querySelectorAll('#paths button').forEach(b => {
+    b.onclick = () => {
+      document.querySelectorAll('#paths button').forEach(x => x.classList.remove('active'));
+      b.classList.add('active');
+      pathName = b.dataset.p;
+      t = 0; rebuild(); draw();
+    };
+  });
+
+  document.getElementById('selftest').onclick = () => {
+    const out = [];
+    const T = (name, cond) => out.push((cond ? '<span class="ok">✓</span> ' : '<span class="bad">✗</span> ') + name);
+    const near = (a, b, eps) => Math.abs(a - b) < eps;
+    // 1) impulse: dft([1,0,0,0]) -> all |X[k]| = 1
+    {
+      const c = Fourier.dft([{ x: 1, y: 0 }, { x: 0, y: 0 }, { x: 0, y: 0 }, { x: 0, y: 0 }]);
+      T('冲激向量：dft([1,0,0,0]) 全部 |X|=1', c.every(x => near(Fourier.magnitude(x), 1, 1e-9)));
+    }
+    // 2) constant: N ones -> X[0]=N, rest 0
+    {
+      const c = Fourier.dft(Array(8).fill({ x: 1, y: 0 }));
+      T('常数序列：X[0]=8，其余为 0', near(c[0].re, 8, 1e-9) && c.slice(1).every(x => near(Fourier.magnitude(x), 0, 1e-9)));
+    }
+    // 3) pure single-frequency circle -> only X[1] = N
+    {
+      const pts = [];
+      for (let i = 0; i < 8; i++){ const a = 2 * Math.PI * i / 8; pts.push({ x: Math.cos(a), y: Math.sin(a) }); }
+      const c = Fourier.dft(pts);
+      T('单频圆：仅 X[1]=8 非零', near(c[1].re, 8, 1e-9) && near(c[1].im, 0, 1e-9) && c.filter((x, i) => i !== 1).every(x => near(Fourier.magnitude(x), 0, 1e-9)));
+    }
+    // 4) round-trip: idft(dft(heart)) == heart
+    {
+      const p = heartPts();
+      const err = Fourier.errRms(Fourier.idft(Fourier.dft(p)), p);
+      T('往返重构：idft(dft(心形)) 误差 < 1e-9', err < 1e-9);
+    }
+    // 5) Parseval energy conservation
+    {
+      const p = heartPts();
+      const r = Fourier.parsevalRatio(p, Fourier.dft(p));
+      T('Parseval 能量守恒：Σ|X|² = N·Σ|x|²', near(r, 1, 1e-9));
+    }
+    // 6) truncation error monotonically non-increasing in K, exact at K=N
+    {
+      const p = heartPts();
+      const c = Fourier.dft(p);
+      const Ks = [1, 2, 4, 8, 16, 32, 64, 128, 256];
+      let ok = true, prev = Infinity;
+      for (const K of Ks){
+        const e = Fourier.errRms(Fourier.partialSum(c, Fourier.topIndices(c, K)), p);
+        if (e > prev + 1e-12) ok = false;
+        prev = e;
+      }
+      T('截断误差随 K 单调不增，K=N 时 ≈ 0', ok && prev < 1e-9);
+    }
+    // 7) DC term = centroid (mean of points)
+    {
+      const p = heartPts();
+      const c = Fourier.dft(p);
+      const mx = p.reduce((s, q) => s + q.x, 0) / p.length;
+      const my = p.reduce((s, q) => s + q.y, 0) / p.length;
+      T('直流项 X[0]/N = 路径质心', near(c[0].re / N, mx, 1e-9) && near(c[0].im / N, my, 1e-9));
+    }
+    document.getElementById('selfcheck').innerHTML = out.join('<br>');
+  };
+
+  rebuild(); draw();
+})();
+</script>
+</body>
+</html>
