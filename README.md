@@ -1,5 +1,12 @@
 # FourierForge · 傅里叶画图机
 
+<p align="center">
+  <a href="https://github.com/CJX0712/fourier-forge/actions/workflows/ci.yml"><img src="https://github.com/CJX0712/fourier-forge/actions/workflows/ci.yml/badge.svg" alt="ci"></a>
+  <a href="https://github.com/CJX0712/fourier-forge/releases"><img src="https://img.shields.io/github/v/release/CJX0712/fourier-forge?sort=semver" alt="release"></a>
+  <a href="https://github.com/CJX0712/fourier-forge/blob/main/LICENSE"><img src="https://img.shields.io/github/license/CJX0712/fourier-forge" alt="license"></a>
+  <img src="https://img.shields.io/badge/author-%E6%99%A8%E6%98%9F-1f6feb" alt="author">
+</p>
+
 单文件、零依赖、可离线运行的**傅里叶级数画图机（epicycles）**——把任意闭合路径做 DFT，分解成一串旋转圆链（大圆套小圆），画笔钉在最外层小圆上，转起来就把路径画出来。
 
 - 4 条预设路径：心形 / 星形 / 利萨茹 / 螺旋
